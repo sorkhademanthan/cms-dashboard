@@ -31,11 +31,11 @@ The core value of a CMS is managing content. We need a robust interface for this
 - [x] Implement drag-and-drop upload functionality.
 - [x] Add image preview and metadata editing (alt text, caption).
 
-## Phase 4: Settings & Configuration
-- Build a **Settings Page** (`/dashboard/settings`) with tabs for:
-    - **General**: Site title, description, logo.
-    - **Team**: Manage users and permissions.
-    - **API Keys**: For headless usage.
+### Phase 4: Settings & Configuration (Completed ✅)
+- [x] Build a **Settings Page** (`/dashboard/settings`) with tabs for:
+    - [x] **General**: Site title, description, logo.
+    - [x] **Team**: Manage users and permissions.
+    - [x] **API Keys**: For headless usage.
 
 ## Phase 5: Polish & Performance
 - **Dark Mode Perfection**: Ensure every pixel looks great in dark mode.
