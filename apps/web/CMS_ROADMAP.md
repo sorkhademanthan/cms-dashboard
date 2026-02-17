@@ -21,15 +21,15 @@ The core value of a CMS is managing content. We need a robust interface for this
 - [x] Create the **Posts List Page** (`/dashboard/posts`) displaying status (published/draft), author, and date.
 - [x] Add "Quick Actions" (Edit, Delete, Preview).
 
-### Step 2: Content Editor
-- implement a **Rich Text Editor** (using Tiptap or similar).
-- Create the **Create/Edit Post Page** (`/dashboard/posts/new`).
-- Add a sidebar in the editor for metadata (tags, categories, SEO settings).
+### Step 2: Content Editor (Completed ✅)
+- [x] implement a **Rich Text Editor** (using Tiptap or similar).
+- [x] Create the **Create/Edit Post Page** (`/dashboard/posts/new`).
+- [x] Add a sidebar in the editor for metadata (tags, categories, SEO settings).
 
-## Phase 3: Media & Assets
-- Create a **Media Library** (`/dashboard/media`) with a masonry grid layout.
-- Implement drag-and-drop upload functionality.
-- Add image preview and metadata editing (alt text, caption).
+### Phase 3: Media & Assets (Completed ✅)
+- [x] Create a **Media Library** (`/dashboard/media`) with a masonry grid layout.
+- [x] Implement drag-and-drop upload functionality.
+- [x] Add image preview and metadata editing (alt text, caption).
 
 ## Phase 4: Settings & Configuration
 - Build a **Settings Page** (`/dashboard/settings`) with tabs for:
