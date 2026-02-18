@@ -34,6 +34,7 @@ function GoogleIcon(props: React.SVGProps<SVGSVGElement>) {
 }
 
 export default function LoginPage() {
+    const [isSignUp, setIsSignUp] = useState(false)
     const [email, setEmail] = useState("")
     const [password, setPassword] = useState("")
     const [loading, setLoading] = useState(false)
@@ -43,44 +44,43 @@ export default function LoginPage() {
     const router = useRouter()
     const supabase = createClient()
 
-    const handleLogin = async (e: React.FormEvent) => {
+    const handleAuth = async (e: React.FormEvent) => {
         e.preventDefault()
         setLoading(true)
         setError(null)
         setMessage(null)
 
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-            email,
-            password,
-        })
+        if (isSignUp) {
+            // Handle Sign Up
+            const { error: signUpError } = await supabase.auth.signUp({
+                email,
+                password,
+                options: {
+                    emailRedirectTo: `${location.origin}/auth/callback`,
+                },
+            })
 
-        if (signInError) {
-            setError(signInError.message)
-            setLoading(false)
+            if (signUpError) {
+                setError(signUpError.message)
+                setLoading(false)
+            } else {
+                setMessage("Check your email for confirmation link!")
+                setLoading(false)
+            }
         } else {
-            router.push("/dashboard")
-            router.refresh()
-        }
-    }
+            // Handle Login
+            const { error: signInError } = await supabase.auth.signInWithPassword({
+                email,
+                password,
+            })
 
-    const handleSignUp = async () => {
-        setLoading(true)
-        setError(null)
-        setMessage(null)
-        const { error: signUpError } = await supabase.auth.signUp({
-            email,
-            password,
-            options: {
-                emailRedirectTo: `${location.origin}/auth/callback`,
-            },
-        })
-
-        if (signUpError) {
-            setError(signUpError.message)
-            setLoading(false)
-        } else {
-            setMessage("Check your email for confirmation link!")
-            setLoading(false)
+            if (signInError) {
+                setError(signInError.message)
+                setLoading(false)
+            } else {
+                router.push("/dashboard")
+                router.refresh()
+            }
         }
     }
 
@@ -105,9 +105,14 @@ export default function LoginPage() {
         <div className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
             <Card className="w-full max-w-sm">
                 <CardHeader>
-                    <CardTitle className="text-2xl text-center">Welcome Back</CardTitle>
+                    <CardTitle className="text-2xl text-center">
+                        {isSignUp ? "Create an Account" : "Welcome Back"}
+                    </CardTitle>
                     <CardDescription className="text-center">
-                        Login to your Modern CMS workspace
+                        {isSignUp
+                            ? "Enter your email below to create your account"
+                            : "Login to your Modern CMS workspace"
+                        }
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -142,7 +147,7 @@ export default function LoginPage() {
                         </div>
                     </div>
 
-                    <form onSubmit={handleLogin} className="grid gap-4">
+                    <form onSubmit={handleAuth} className="grid gap-4">
                         <div className="grid gap-2">
                             <Label htmlFor="email">Email</Label>
                             <Input
@@ -182,20 +187,24 @@ export default function LoginPage() {
 
                         <Button type="submit" className="w-full" disabled={loading || !!oauthLoading}>
                             {loading ? <Loader2 className="animate-spin mr-2 h-4 w-4" /> : null}
-                            Sign in with Email
+                            {isSignUp ? "Sign Up with Email" : "Sign In with Email"}
                         </Button>
                     </form>
                 </CardContent>
                 <CardFooter className="flex flex-col gap-2">
                     <div className="text-xs text-center text-muted-foreground">
-                        Don&apos;t have an account?{" "}
+                        {isSignUp ? "Already have an account? " : "Don't have an account? "}
                         <button
-                            onClick={handleSignUp}
-                            className="underline hover:text-primary transition-colors disabled:opacity-50"
-                            disabled={loading || !!oauthLoading || !email || !password}
+                            onClick={() => {
+                                setIsSignUp(!isSignUp)
+                                setError(null)
+                                setMessage(null)
+                            }}
+                            className="underline hover:text-primary transition-colors"
+                            disabled={loading || !!oauthLoading}
                             type="button"
                         >
-                            Sign up
+                            {isSignUp ? "Login" : "Sign up"}
                         </button>
                     </div>
                 </CardFooter>
