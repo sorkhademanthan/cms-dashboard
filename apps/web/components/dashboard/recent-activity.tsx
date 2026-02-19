@@ -1,72 +1,57 @@
-
+import { createClient } from "@/lib/supabase/server"
 import {
     Avatar,
     AvatarFallback,
     AvatarImage,
 } from "@/components/ui/avatar"
+import { formatDistanceToNow } from "date-fns"
 
-export function RecentActivity() {
+export async function RecentActivity() {
+    const supabase = await createClient()
+
+    // Fetch recent comments
+    const { data: comments } = await supabase
+        .from("comments")
+        .select(`
+            id,
+            content,
+            created_at,
+            profiles (
+                full_name,
+                email,
+                avatar_url
+            )
+        `)
+        .order("created_at", { ascending: false })
+        .limit(5)
+
+    if (!comments || comments.length === 0) {
+        return <div className="text-sm text-muted-foreground">No recent activity.</div>
+    }
+
     return (
         <div className="space-y-8">
-            <div className="flex items-center">
-                <Avatar className="h-9 w-9">
-                    <AvatarImage src="/avatars/01.png" alt="Avatar" />
-                    <AvatarFallback>OM</AvatarFallback>
-                </Avatar>
-                <div className="ml-4 space-y-1">
-                    <p className="text-sm font-medium leading-none">Olivia Martin</p>
-                    <p className="text-sm text-muted-foreground">
-                        olivia.martin@email.com
-                    </p>
+            {comments.map((comment: any) => (
+                <div key={comment.id} className="flex items-center">
+                    <Avatar className="h-9 w-9">
+                        <AvatarImage src={comment.profiles?.avatar_url} alt="Avatar" />
+                        <AvatarFallback>
+                            {comment.profiles?.full_name?.substring(0, 2).toUpperCase() || "US"}
+                        </AvatarFallback>
+                    </Avatar>
+                    <div className="ml-4 space-y-1">
+                        <p className="text-sm font-medium leading-none">
+                            {comment.profiles?.full_name || "Unknown User"}
+                        </p>
+                        <p className="text-sm text-muted-foreground truncate max-w-[200px]">
+                            {comment.content}
+                        </p>
+                    </div>
+                    <div className="ml-auto text-xs text-muted-foreground">
+                        {formatDistanceToNow(new Date(comment.created_at), { addSuffix: true })}
+                    </div>
                 </div>
-                <div className="ml-auto font-medium">+$1,999.00</div>
-            </div>
-            <div className="flex items-center">
-                <Avatar className="flex h-9 w-9 items-center justify-center space-y-0 border">
-                    <AvatarImage src="/avatars/02.png" alt="Avatar" />
-                    <AvatarFallback>JL</AvatarFallback>
-                </Avatar>
-                <div className="ml-4 space-y-1">
-                    <p className="text-sm font-medium leading-none">Jackson Lee</p>
-                    <p className="text-sm text-muted-foreground">jackson.lee@email.com</p>
-                </div>
-                <div className="ml-auto font-medium">+$39.00</div>
-            </div>
-            <div className="flex items-center">
-                <Avatar className="h-9 w-9">
-                    <AvatarImage src="/avatars/03.png" alt="Avatar" />
-                    <AvatarFallback>IN</AvatarFallback>
-                </Avatar>
-                <div className="ml-4 space-y-1">
-                    <p className="text-sm font-medium leading-none">Isabella Nguyen</p>
-                    <p className="text-sm text-muted-foreground">
-                        isabella.nguyen@email.com
-                    </p>
-                </div>
-                <div className="ml-auto font-medium">+$299.00</div>
-            </div>
-            <div className="flex items-center">
-                <Avatar className="h-9 w-9">
-                    <AvatarImage src="/avatars/04.png" alt="Avatar" />
-                    <AvatarFallback>WK</AvatarFallback>
-                </Avatar>
-                <div className="ml-4 space-y-1">
-                    <p className="text-sm font-medium leading-none">William Kim</p>
-                    <p className="text-sm text-muted-foreground">will@email.com</p>
-                </div>
-                <div className="ml-auto font-medium">+$99.00</div>
-            </div>
-            <div className="flex items-center">
-                <Avatar className="h-9 w-9">
-                    <AvatarImage src="/avatars/05.png" alt="Avatar" />
-                    <AvatarFallback>SD</AvatarFallback>
-                </Avatar>
-                <div className="ml-4 space-y-1">
-                    <p className="text-sm font-medium leading-none">Sofia Davis</p>
-                    <p className="text-sm text-muted-foreground">sofia.davis@email.com</p>
-                </div>
-                <div className="ml-auto font-medium">+$39.00</div>
-            </div>
+            ))}
         </div>
     )
 }

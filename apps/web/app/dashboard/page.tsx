@@ -12,9 +12,33 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Overview } from "@/components/dashboard/overview"
 import { RecentActivity } from "@/components/dashboard/recent-activity"
 import { Input } from "@/components/ui/input"
-import { Activity, CreditCard, DollarSign, Search, Users } from "lucide-react"
+import { Activity, FileText, MessageSquare, Search, Users } from "lucide-react"
+import { createClient } from "@/lib/supabase/server"
 
-export default function Page() {
+export default async function Page() {
+  const supabase = await createClient()
+
+  // 1. Total Posts
+  const { count: totalPosts } = await supabase
+    .from("posts")
+    .select("*", { count: "exact", head: true })
+
+  // 2. Published Posts
+  const { count: publishedPosts } = await supabase
+    .from("posts")
+    .select("*", { count: "exact", head: true })
+    .eq("published", true)
+
+  // 3. Total Comments
+  const { count: totalComments } = await supabase
+    .from("comments")
+    .select("*", { count: "exact", head: true })
+
+  // 4. Total Users (Profiles) - Assuming publicly readable or admin view
+  const { count: totalUsers } = await supabase
+    .from("profiles")
+    .select("*", { count: "exact", head: true })
+
   return (
     <>
       <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b px-4">
@@ -35,10 +59,7 @@ export default function Page() {
             </BreadcrumbList>
           </Breadcrumb>
         </div>
-        <div className="relative w-full max-w-[300px]">
-          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search..." className="pl-8" />
-        </div>
+
       </header>
       <div className="flex-1 space-y-4 p-8 pt-6">
         <div className="flex items-center justify-between space-y-2">
@@ -48,54 +69,54 @@ export default function Page() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">
-                Total Revenue
+                Total Posts
               </CardTitle>
-              <DollarSign className="h-4 w-4 text-muted-foreground" />
+              <FileText className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">$45,231.89</div>
+              <div className="text-2xl font-bold">{totalPosts || 0}</div>
               <p className="text-xs text-muted-foreground">
-                +20.1% from last month
+                All time posts
               </p>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">
-                Subscriptions
-              </CardTitle>
-              <Users className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">+2350</div>
-              <p className="text-xs text-muted-foreground">
-                +180.1% from last month
-              </p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Sales</CardTitle>
-              <CreditCard className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">+12,234</div>
-              <p className="text-xs text-muted-foreground">
-                +19% from last month
-              </p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">
-                Active Now
+                Published
               </CardTitle>
               <Activity className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">+573</div>
+              <div className="text-2xl font-bold">{publishedPosts || 0}</div>
               <p className="text-xs text-muted-foreground">
-                +201 since last hour
+                Live on blog
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Comments</CardTitle>
+              <MessageSquare className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{totalComments || 0}</div>
+              <p className="text-xs text-muted-foreground">
+                Across all posts
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">
+                Authors
+              </CardTitle>
+              <Users className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{totalUsers || 0}</div>
+              <p className="text-xs text-muted-foreground">
+                Registered users
               </p>
             </CardContent>
           </Card>
@@ -113,7 +134,7 @@ export default function Page() {
             <CardHeader>
               <CardTitle>Recent Activity</CardTitle>
               <CardDescription>
-                You made 265 sales this month.
+                Latest actions on your blog.
               </CardDescription>
             </CardHeader>
             <CardContent>
