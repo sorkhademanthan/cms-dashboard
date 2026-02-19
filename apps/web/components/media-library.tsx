@@ -28,7 +28,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 import { createClient } from "@/lib/supabase/client"
-import { toast } from "sonner" // Assuming you have a toast library or similar. If not, can use console for now.
+import { toast } from "sonner"
 
 // Type Definition
 interface MediaItem {
@@ -40,7 +40,11 @@ interface MediaItem {
     createdAt: string
 }
 
-export function MediaLibrary() {
+interface MediaLibraryProps {
+    onSelect?: (url: string) => void
+}
+
+export function MediaLibrary({ onSelect }: MediaLibraryProps) {
     const [media, setMedia] = React.useState<MediaItem[]>([])
     const [uploading, setUploading] = React.useState(false)
     const [loading, setLoading] = React.useState(true)
@@ -191,8 +195,17 @@ export function MediaLibrary() {
                         {media.map((item) => (
                             <div
                                 key={item.id}
-                                className="group relative aspect-square overflow-hidden rounded-lg border bg-muted cursor-pointer"
-                                onClick={() => setSelectedItem(item)}
+                                className={cn(
+                                    "group relative aspect-square overflow-hidden rounded-lg border bg-muted cursor-pointer transition-all hover:ring-2 hover:ring-primary hover:ring-offset-2",
+                                    // Highlight functionality or something if selected later
+                                )}
+                                onClick={() => {
+                                    if (onSelect) {
+                                        onSelect(item.url)
+                                    } else {
+                                        setSelectedItem(item)
+                                    }
+                                }}
                             >
                                 <div className="absolute inset-0 z-0">
                                     <Image
@@ -220,6 +233,7 @@ export function MediaLibrary() {
                                             <DropdownMenuItem onClick={(e) => {
                                                 e.stopPropagation()
                                                 navigator.clipboard.writeText(item.url)
+                                                toast("URL Copied to clipboard")
                                             }}>
                                                 <Copy className="mr-2 h-4 w-4" /> Copy URL
                                             </DropdownMenuItem>
@@ -277,6 +291,7 @@ export function MediaLibrary() {
                                 <div className="flex justify-end gap-2">
                                     <Button variant="outline" onClick={() => {
                                         navigator.clipboard.writeText(selectedItem.url)
+                                        toast("URL Copied to clipboard")
                                     }}>
                                         <Copy className="mr-2 h-4 w-4" /> Copy Link
                                     </Button>

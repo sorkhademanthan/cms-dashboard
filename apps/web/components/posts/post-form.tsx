@@ -20,7 +20,10 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { toast } from "sonner"
-import { Loader2 } from "lucide-react"
+import { Loader2, ImageIcon, X } from "lucide-react"
+import { MediaLibrary } from "@/components/media-library"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import Image from "next/image"
 
 const postSchema = z.object({
     title: z.string().min(2, {
@@ -47,6 +50,7 @@ export function PostForm({ initialData }: PostFormProps) {
     const router = useRouter()
     const supabase = createClient()
     const [loading, setLoading] = useState(false)
+    const [openMediaPicker, setOpenMediaPicker] = useState(false)
 
     const defaultValues: PostFormValues = {
         title: (initialData?.title as string) || "",
@@ -158,17 +162,64 @@ export function PostForm({ initialData }: PostFormProps) {
                         </FormItem>
                     )}
                 />
+
                 <FormField
                     control={form.control}
                     name="image_url"
                     render={({ field }) => (
                         <FormItem>
-                            <FormLabel>Cover Image URL</FormLabel>
+                            <FormLabel>Cover Image</FormLabel>
                             <FormControl>
-                                <Input placeholder="https://..." {...field} />
+                                <div className="space-y-4">
+                                    {field.value ? (
+                                        <div className="relative aspect-video w-full max-w-md overflow-hidden rounded-lg border bg-muted">
+                                            <Image
+                                                src={field.value}
+                                                alt="Cover"
+                                                fill
+                                                className="object-cover"
+                                                unoptimized
+                                            />
+                                            <Button
+                                                type="button"
+                                                variant="destructive"
+                                                size="icon"
+                                                className="absolute right-2 top-2 h-6 w-6"
+                                                onClick={() => field.onChange("")}
+                                            >
+                                                <X className="h-3 w-3" />
+                                            </Button>
+                                        </div>
+                                    ) : (
+                                        <div className="flex aspect-video w-full max-w-md items-center justify-center rounded-lg border border-dashed bg-muted/50">
+                                            <ImageIcon className="h-10 w-10 text-muted-foreground" />
+                                        </div>
+                                    )}
+                                    <div className="flex gap-2">
+                                        <Input placeholder="https://..." {...field} className="flex-1" />
+                                        <Dialog open={openMediaPicker} onOpenChange={setOpenMediaPicker}>
+                                            <DialogTrigger asChild>
+                                                <Button type="button" variant="secondary">
+                                                    Select Image
+                                                </Button>
+                                            </DialogTrigger>
+                                            <DialogContent className="max-w-4xl h-[80vh] flex flex-col">
+                                                <DialogHeader>
+                                                    <DialogTitle>Select Media</DialogTitle>
+                                                </DialogHeader>
+                                                <div className="flex-1 overflow-hidden -mx-4 -mb-4">
+                                                    <MediaLibrary onSelect={(url) => {
+                                                        field.onChange(url)
+                                                        setOpenMediaPicker(false)
+                                                    }} />
+                                                </div>
+                                            </DialogContent>
+                                        </Dialog>
+                                    </div>
+                                </div>
                             </FormControl>
                             <FormDescription>
-                                Paste a URL from the Media Library.
+                                Paste a URL or select from the Media Library.
                             </FormDescription>
                             <FormMessage />
                         </FormItem>
@@ -221,7 +272,7 @@ export function PostForm({ initialData }: PostFormProps) {
                             </div>
                             <FormControl>
                                 <Switch
-                                    checked={field.value}
+                                    checked={!!field.value}
                                     onCheckedChange={field.onChange}
                                 />
                             </FormControl>
