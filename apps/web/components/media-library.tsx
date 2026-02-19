@@ -3,14 +3,13 @@
 import * as React from "react"
 import Image from "next/image"
 import { useDropzone } from "react-dropzone"
-import { Copy, MoreHorizontal, Trash, Upload, X } from "lucide-react"
+import { Copy, MoreHorizontal, Trash, Upload, X, Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
     Dialog,
     DialogContent,
     DialogDescription,
-    DialogFooter,
     DialogHeader,
     DialogTitle,
     DialogTrigger,
@@ -28,51 +27,10 @@ import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
+import { createClient } from "@/lib/supabase/client"
+import { toast } from "sonner" // Assuming you have a toast library or similar. If not, can use console for now.
 
-// Mock Data
-const initialMedia = [
-    {
-        id: "1",
-        name: "hero-image.jpg",
-        url: "https://images.unsplash.com/photo-1682687220742-aba13b6e50ba?auto=format&fit=crop&q=80&w=800&lazy=load",
-        size: "1.2 MB",
-        type: "image/jpeg",
-        createdAt: "2024-03-20",
-    },
-    {
-        id: "2",
-        name: "avatar-01.png",
-        url: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=800&lazy=load",
-        size: "450 KB",
-        type: "image/png",
-        createdAt: "2024-03-19",
-    },
-    {
-        id: "3",
-        name: "conference-hall.jpg",
-        url: "https://images.unsplash.com/photo-1517457373958-b7bdd4587205?auto=format&fit=crop&q=80&w=800&lazy=load",
-        size: "2.8 MB",
-        type: "image/jpeg",
-        createdAt: "2024-03-18",
-    },
-    {
-        id: "4",
-        name: "product-mockup.png",
-        url: "https://images.unsplash.com/photo-1534972195531-d756b9bfa9f2?auto=format&fit=crop&q=80&w=800&lazy=load",
-        size: "3.5 MB",
-        type: "image/png",
-        createdAt: "2024-03-15",
-    },
-    {
-        id: "5",
-        name: "team-meeting.jpg",
-        url: "https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&q=80&w=800&lazy=load",
-        size: "1.8 MB",
-        type: "image/jpeg",
-        createdAt: "2024-03-10",
-    },
-]
-
+// Type Definition
 interface MediaItem {
     id: string
     name: string
@@ -83,21 +41,79 @@ interface MediaItem {
 }
 
 export function MediaLibrary() {
-    const [media, setMedia] = React.useState<MediaItem[]>(initialMedia)
+    const [media, setMedia] = React.useState<MediaItem[]>([])
+    const [uploading, setUploading] = React.useState(false)
+    const [loading, setLoading] = React.useState(true)
     const [selectedItem, setSelectedItem] = React.useState<MediaItem | null>(null)
+    const [openUpload, setOpenUpload] = React.useState(false) // Control upload dialog
 
-    const onDrop = React.useCallback((acceptedFiles: File[]) => {
-        // In a real app, we would upload these to a server
-        const newItems = acceptedFiles.map((file) => ({
-            id: Math.random().toString(36).substring(7),
-            name: file.name,
-            url: URL.createObjectURL(file), // Local preview
-            size: (file.size / 1024 / 1024).toFixed(2) + " MB",
-            type: file.type,
-            createdAt: new Date().toISOString().split("T")[0] || new Date().toISOString(),
-        }))
-        setMedia((prev) => [...newItems, ...prev])
+    const supabase = createClient()
+
+    // Fetch Media on Load
+    React.useEffect(() => {
+        fetchMedia()
     }, [])
+
+    const fetchMedia = async () => {
+        setLoading(true)
+        const { data, error } = await supabase.storage.from("media").list("", {
+            limit: 100,
+            offset: 0,
+            sortBy: { column: "created_at", order: "desc" },
+        })
+
+        if (error) {
+            console.error("Error fetching media:", error)
+        } else {
+            // Transform Supabase data to our MediaItem format
+            const items = data.map((file) => {
+                const { data: { publicUrl } } = supabase.storage.from("media").getPublicUrl(file.name)
+                return {
+                    id: file.id,
+                    name: file.name,
+                    url: publicUrl,
+                    size: (file.metadata?.size / 1024 / 1024).toFixed(2) + " MB",
+                    type: file.metadata?.mimetype || "unknown",
+                    createdAt: new Date(file.created_at).toLocaleDateString(),
+                }
+            })
+            setMedia(items)
+        }
+        setLoading(false)
+    }
+
+    const onDrop = React.useCallback(async (acceptedFiles: File[]) => {
+        setUploading(true)
+        const newItems: MediaItem[] = []
+
+        for (const file of acceptedFiles) {
+            const fileName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.]/g, "_")}` // Sanitize filename
+            const { data, error } = await supabase.storage
+                .from("media")
+                .upload(fileName, file, {
+                    cacheControl: "3600",
+                    upsert: false,
+                })
+
+            if (error) {
+                console.error("Upload error:", error)
+            } else {
+                const { data: { publicUrl } } = supabase.storage.from("media").getPublicUrl(fileName)
+                newItems.push({
+                    id: data.id || Math.random().toString(), // data.id might be path
+                    name: fileName,
+                    url: publicUrl,
+                    size: (file.size / 1024 / 1024).toFixed(2) + " MB",
+                    type: file.type,
+                    createdAt: new Date().toISOString().split("T")[0] || "",
+                })
+            }
+        }
+
+        setMedia((prev) => [...newItems, ...prev])
+        setUploading(false)
+        setOpenUpload(false) // Close dialog
+    }, [supabase])
 
     const { getRootProps, getInputProps, isDragActive } = useDropzone({
         onDrop,
@@ -105,6 +121,16 @@ export function MediaLibrary() {
             "image/*": [],
         },
     })
+
+    const handleDelete = async (item: MediaItem) => {
+        const { error } = await supabase.storage.from("media").remove([item.name])
+        if (error) {
+            console.error("Delete error:", error)
+        } else {
+            setMedia((prev) => prev.filter((m) => m.id !== item.id))
+            if (selectedItem?.id === item.id) setSelectedItem(null)
+        }
+    }
 
     return (
         <div className="flex h-full flex-col">
@@ -115,7 +141,7 @@ export function MediaLibrary() {
                         Manage your images and assets.
                     </p>
                 </div>
-                <Dialog>
+                <Dialog open={openUpload} onOpenChange={setOpenUpload}>
                     <DialogTrigger asChild>
                         <Button>
                             <Upload className="mr-2 h-4 w-4" /> Upload
@@ -137,10 +163,10 @@ export function MediaLibrary() {
                         >
                             <Input {...getInputProps()} className="hidden" />
                             <div className="rounded-full bg-muted p-4">
-                                <Upload className="h-8 w-8 text-muted-foreground" />
+                                {uploading ? <Loader2 className="h-8 w-8 text-muted-foreground animate-spin" /> : <Upload className="h-8 w-8 text-muted-foreground" />}
                             </div>
                             <p className="mt-2 text-sm font-medium">
-                                {isDragActive ? "Drop files here" : "Drag files here to upload"}
+                                {uploading ? "Uploading..." : (isDragActive ? "Drop files here" : "Drag files here to upload")}
                             </p>
                             <p className="mt-1 text-xs text-muted-foreground">
                                 SVG, PNG, JPG or GIF (max. 10MB)
@@ -151,54 +177,69 @@ export function MediaLibrary() {
             </div>
 
             <ScrollArea className="flex-1 p-4">
-                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-                    {media.map((item) => (
-                        <div
-                            key={item.id}
-                            className="group relative aspect-square overflow-hidden rounded-lg border bg-muted"
-                            onClick={() => setSelectedItem(item)}
-                        >
-                            <Image
-                                src={item.url}
-                                alt={item.name}
-                                className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                                width={300}
-                                height={300}
-                            />
-                            <div className="absolute inset-x-0 bottom-0 bg-black/60 p-2 opacity-0 transition-opacity group-hover:opacity-100">
-                                <p className="truncate text-xs text-white font-medium">{item.name}</p>
-                                <p className="text-[10px] text-white/80">{item.size}</p>
+                {loading ? (
+                    <div className="flex h-40 items-center justify-center">
+                        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                    </div>
+                ) : media.length === 0 ? (
+                    <div className="flex h-40 flex-col items-center justify-center text-muted-foreground">
+                        <p>No media found.</p>
+                        <p className="text-sm">Upload some images to get started.</p>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+                        {media.map((item) => (
+                            <div
+                                key={item.id}
+                                className="group relative aspect-square overflow-hidden rounded-lg border bg-muted cursor-pointer"
+                                onClick={() => setSelectedItem(item)}
+                            >
+                                <div className="absolute inset-0 z-0">
+                                    <Image
+                                        src={item.url}
+                                        alt={item.name}
+                                        className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                        width={300}
+                                        height={300}
+                                        unoptimized // Supabase URLs might need this or configured domains
+                                    />
+                                </div>
+                                <div className="absolute inset-x-0 bottom-0 bg-black/60 p-2 opacity-0 transition-opacity group-hover:opacity-100 z-10 transition-all">
+                                    <p className="truncate text-xs text-white font-medium">{item.name}</p>
+                                    <p className="text-[10px] text-white/80">{item.size}</p>
+                                </div>
+                                <div className="absolute right-2 top-2 opacity-0 transition-opacity group-hover:opacity-100 z-20">
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                            <Button variant="secondary" size="icon" className="h-6 w-6" onClick={(e) => e.stopPropagation()}>
+                                                <MoreHorizontal className="h-3 w-3" />
+                                            </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                            <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                                            <DropdownMenuItem onClick={(e) => {
+                                                e.stopPropagation()
+                                                navigator.clipboard.writeText(item.url)
+                                            }}>
+                                                <Copy className="mr-2 h-4 w-4" /> Copy URL
+                                            </DropdownMenuItem>
+                                            <DropdownMenuSeparator />
+                                            <DropdownMenuItem className="text-destructive" onClick={(e) => {
+                                                e.stopPropagation()
+                                                handleDelete(item)
+                                            }}>
+                                                <Trash className="mr-2 h-4 w-4" /> Delete
+                                            </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
+                                </div>
                             </div>
-                            <div className="absolute right-2 top-2 opacity-0 transition-opacity group-hover:opacity-100">
-                                <DropdownMenu>
-                                    <DropdownMenuTrigger asChild>
-                                        <Button variant="secondary" size="icon" className="h-6 w-6" onClick={(e) => e.stopPropagation()}>
-                                            <MoreHorizontal className="h-3 w-3" />
-                                        </Button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end">
-                                        <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                                        <DropdownMenuItem onClick={(e) => {
-                                            e.stopPropagation()
-                                            navigator.clipboard.writeText(item.url)
-                                        }}>
-                                            <Copy className="mr-2 h-4 w-4" /> Copy URL
-                                        </DropdownMenuItem>
-                                        <DropdownMenuSeparator />
-                                        <DropdownMenuItem className="text-destructive" onClick={(e) => {
-                                            e.stopPropagation()
-                                            setMedia(media.filter(m => m.id !== item.id))
-                                        }}>
-                                            <Trash className="mr-2 h-4 w-4" /> Delete
-                                        </DropdownMenuItem>
-                                    </DropdownMenuContent>
-                                </DropdownMenu>
-                            </div>
-                        </div>
-                    ))}
-                </div>
+                        ))}
+                    </div>
+                )}
             </ScrollArea>
 
+            {/* Detail View (Simplified for now) */}
             <Dialog open={!!selectedItem} onOpenChange={(open) => !open && setSelectedItem(null)}>
                 <DialogContent className="max-w-3xl">
                     <DialogHeader>
@@ -206,22 +247,23 @@ export function MediaLibrary() {
                     </DialogHeader>
                     {selectedItem && (
                         <div className="grid gap-6 md:grid-cols-2">
-                            <div className="relative aspect-video w-full overflow-hidden rounded-lg border bg-muted">
+                            <div className="relative aspect-video w-full overflow-hidden rounded-lg border bg-muted flex items-center justify-center">
                                 <Image
                                     src={selectedItem.url}
                                     alt={selectedItem.name}
                                     fill
                                     className="object-contain"
+                                    unoptimized
                                 />
                             </div>
                             <div className="space-y-4">
                                 <div className="grid gap-1">
                                     <Label>Filename</Label>
-                                    <div className="font-medium">{selectedItem.name}</div>
+                                    <div className="font-medium break-all">{selectedItem.name}</div>
                                 </div>
                                 <div className="grid gap-1">
                                     <Label>File Type</Label>
-                                    <div className="text-sm text-muted-foreground uppercase">{selectedItem.type.split('/')[1]}</div>
+                                    <div className="text-sm text-muted-foreground uppercase">{selectedItem.type.split('/')[1] || selectedItem.type}</div>
                                 </div>
                                 <div className="grid gap-1">
                                     <Label>Size</Label>
@@ -232,16 +274,14 @@ export function MediaLibrary() {
                                     <div className="text-sm text-muted-foreground">{selectedItem.createdAt}</div>
                                 </div>
                                 <Separator />
-                                <div className="grid gap-2">
-                                    <Label htmlFor="alt-text">Alt Text</Label>
-                                    <Input id="alt-text" placeholder="Describe the image for screen readers" />
-                                </div>
                                 <div className="flex justify-end gap-2">
-                                    <Button variant="outline" onClick={() => setSelectedItem(null)}>
-                                        Close
+                                    <Button variant="outline" onClick={() => {
+                                        navigator.clipboard.writeText(selectedItem.url)
+                                    }}>
+                                        <Copy className="mr-2 h-4 w-4" /> Copy Link
                                     </Button>
-                                    <Button onClick={() => setSelectedItem(null)}>
-                                        Save Changes
+                                    <Button variant="destructive" onClick={() => handleDelete(selectedItem)}>
+                                        Delete
                                     </Button>
                                 </div>
                             </div>
