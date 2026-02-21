@@ -1,9 +1,10 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import type { RealtimeChannel } from "@supabase/supabase-js"
 import { createClient } from "@/lib/supabase/client"
 import { MessageBubble } from "./message-bubble"
-import { Hash } from "lucide-react"
+import { Hash, Wifi, WifiOff, Loader2 } from "lucide-react"
 import Link from "next/link"
 import { cn } from "@/lib/utils"
 
@@ -22,65 +23,63 @@ export interface Message {
     } | null
 }
 
-interface Room {
-    id: string
-    name: string
-    type: string
-}
+interface Room { id: string; name: string; type: string }
 
 interface ChatLayoutProps {
     rooms: Room[]
     currentRoom: Room
     initialMessages: Message[]
-    currentUser: {
-        id: string
-        full_name: string
-        avatar_url?: string
-    }
+    currentUser: { id: string; full_name: string; avatar_url?: string }
 }
+
+type Status = "connecting" | "connected" | "error"
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function ChatLayout({ rooms, currentRoom, initialMessages, currentUser }: ChatLayoutProps) {
-    // ✅ RULE 1: Single Source of Truth — ALL message state lives here only
-    const [messages, setMessages] = useState<Message[]>(initialMessages)
 
-    // Auto-scroll anchor ref — updates on every render per spec
+    // Single source of truth
+    const [messages, setMessages] = useState<Message[]>(initialMessages)
+    const [status, setStatus] = useState<Status>("connecting")
     const bottomRef = useRef<HTMLDivElement>(null)
 
-    // Stable supabase client (create once, never recreate)
-    const supabaseRef = useRef(createClient())
-    const supabase = supabaseRef.current
+    // Stable refs — never change between renders
+    const supabase = useRef(createClient()).current
+    const channelRef = useRef<RealtimeChannel | null>(null)
 
-    // ─── Profile Cache ─────────────────────────────────────────────────────────
-    // Pre-seed from server-loaded messages to avoid any DB call for known users
+    // ─── Profile Cache ────────────────────────────────────────────────────────
     const profileCache = useRef<Record<string, NonNullable<Message["profiles"]>>>({})
     useEffect(() => {
         initialMessages.forEach((m) => {
-            if (m.user_id && m.profiles) {
-                profileCache.current[m.user_id] = m.profiles
-            }
+            if (m.user_id && m.profiles) profileCache.current[m.user_id] = m.profiles
         })
-        // Also seed current user's own profile
+        // Current user's own profile
         profileCache.current[currentUser.id] = {
             full_name: currentUser.full_name,
             avatar_url: currentUser.avatar_url || "",
             username: "",
         }
-    }, []) // run once on mount
+    }, []) // eslint-disable-line
 
-    // ─── Auto-scroll ───────────────────────────────────────────────────────────
-    // Per spec: triggers on every state update (messages array change)
+    // ─── Auto-scroll on every messages change ─────────────────────────────────
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" })
     }, [messages])
 
-    // Initial instant scroll (before any animation)
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "instant" })
     }, [])
 
-    // ─── Profile fetcher (cached) ──────────────────────────────────────────────
+    // ─── Deduplicated append ──────────────────────────────────────────────────
+    const appendMessage = useCallback((msg: Message) => {
+        setMessages((prev) => {
+            // Skip if already in list (by real ID)
+            if (prev.some((m) => m.id === msg.id)) return prev
+            return [...prev, msg]
+        })
+    }, [])
+
+    // ─── Profile fetcher ──────────────────────────────────────────────────────
     const getProfile = useCallback(async (userId: string) => {
         if (profileCache.current[userId]) return profileCache.current[userId]
         const { data } = await supabase
@@ -88,115 +87,113 @@ export function ChatLayout({ rooms, currentRoom, initialMessages, currentUser }:
             .select("full_name, avatar_url, username")
             .eq("id", userId)
             .single()
-        const profile = data || { full_name: "Unknown", avatar_url: "", username: "" }
-        profileCache.current[userId] = profile
-        return profile
+        const p = data || { full_name: "Unknown", avatar_url: "", username: "" }
+        profileCache.current[userId] = p
+        return p
     }, [supabase])
 
-    // ─── ✅ RULE 3: Supabase Realtime Subscription ────────────────────────────
+    // ─── Realtime Channel ─────────────────────────────────────────────────────
+    // Uses BOTH Broadcast (instant) + postgres_changes (reliable backup)
     useEffect(() => {
-        const channel = supabase
-            .channel(`room-${currentRoom.id}`) // unique channel name per room
+        setStatus("connecting")
+
+        const channel = supabase.channel(`room:${currentRoom.id}`, {
+            config: { broadcast: { self: false } },
+        })
+
+        // ── 1. Broadcast listener (instant — sender pushes directly) ──────────
+        channel.on("broadcast", { event: "new_message" }, ({ payload }) => {
+            const msg = payload as Message
+            // Build full message using cached profile
+            const profile = profileCache.current[msg.user_id] || null
+            appendMessage({ ...msg, profiles: profile })
+
+            // Patch profile in background if not cached yet
+            if (!profile) {
+                getProfile(msg.user_id).then((p) =>
+                    setMessages((prev) =>
+                        prev.map((m) => m.id === msg.id ? { ...m, profiles: p } : m)
+                    )
+                )
+            }
+        })
+
+        // ── 2. postgres_changes (backup for missed broadcasts / page reload) ──
+        channel.on(
+            "postgres_changes",
+            {
+                event: "INSERT",
+                schema: "public",
+                table: "chat_messages",
+                filter: `room_id=eq.${currentRoom.id}`,
+            },
+            async (payload) => {
+                const raw = payload.new as { id: string; content: string; created_at: string; user_id: string }
+                const profile = profileCache.current[raw.user_id] || null
+                appendMessage({
+                    id: raw.id,
+                    content: raw.content,
+                    created_at: raw.created_at,
+                    user_id: raw.user_id,
+                    pending: false,
+                    profiles: profile,
+                })
+                if (!profile) {
+                    const p = await getProfile(raw.user_id)
+                    setMessages((prev) =>
+                        prev.map((m) => m.id === raw.id ? { ...m, profiles: p } : m)
+                    )
+                }
+            }
+        )
             .on(
                 "postgres_changes",
-                {
-                    event: "INSERT",
-                    schema: "public",
-                    table: "chat_messages",
-                    filter: `room_id=eq.${currentRoom.id}`,
-                },
-                async (payload) => {
-                    const raw = payload.new as {
-                        id: string
-                        content: string
-                        created_at: string
-                        user_id: string
-                        room_id: string
-                    }
-
-                    // Build message using cached profile (instant — no DB wait)
-                    const profile = profileCache.current[raw.user_id] || null
-
-                    const confirmedMsg: Message = {
-                        id: raw.id,
-                        content: raw.content,
-                        created_at: raw.created_at,
-                        user_id: raw.user_id,
-                        pending: false,
-                        profiles: profile,
-                    }
-
-                    // ✅ RULE 3 — Deduplication Logic:
-                    // Replace a matching optimistic (pending) bubble, or append if new
-                    setMessages((prev) => {
-                        const pendingIdx = prev.findIndex(
-                            (m) =>
-                                m.pending === true &&
-                                m.user_id === raw.user_id &&
-                                m.content === raw.content
-                        )
-                        if (pendingIdx !== -1) {
-                            // Swap the optimistic placeholder with the real confirmed message
-                            const updated = [...prev]
-                            updated[pendingIdx] = confirmedMsg
-                            return updated
-                        }
-                        // Not our optimistic message — it's from another user, just append
-                        return [...prev, confirmedMsg]
-                    })
-
-                    // Fetch profile in background if not yet cached, then patch
-                    if (!profile) {
-                        const fetched = await getProfile(raw.user_id)
-                        setMessages((prev) =>
-                            prev.map((m) => (m.id === raw.id ? { ...m, profiles: fetched } : m))
-                        )
-                    }
-                }
+                { event: "DELETE", schema: "public", table: "chat_messages", filter: `room_id=eq.${currentRoom.id}` },
+                (payload) => setMessages((prev) => prev.filter((m) => m.id !== payload.old.id))
             )
-            .on(
-                "postgres_changes",
-                {
-                    event: "DELETE",
-                    schema: "public",
-                    table: "chat_messages",
-                    filter: `room_id=eq.${currentRoom.id}`,
-                },
-                (payload) => {
-                    setMessages((prev) => prev.filter((m) => m.id !== payload.old.id))
-                }
-            )
-            .subscribe((status) => {
-                if (status === "SUBSCRIBED") {
-                    console.log(`✅ Realtime subscribed to room: ${currentRoom.id}`)
-                } else {
-                    console.log(`⚡ Realtime status: ${status}`)
+            .subscribe((s) => {
+                if (s === "SUBSCRIBED") {
+                    setStatus("connected")
+                    channelRef.current = channel
+                    console.log("✅ Realtime + Broadcast subscribed:", currentRoom.id)
+                } else if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(s)) {
+                    setStatus("error")
+                    console.error("❌ Realtime:", s)
                 }
             })
 
         return () => {
+            channelRef.current = null
             supabase.removeChannel(channel)
         }
-    }, [currentRoom.id, supabase, getProfile])
+    }, [currentRoom.id, supabase, appendMessage, getProfile])
 
-    // ─── ✅ RULE 2: Optimistic Send Handler ───────────────────────────────────
-    // Called by MessageInput BEFORE the DB insert fires
+    // ─── Optimistic send ──────────────────────────────────────────────────────
     const handleOptimisticSend = useCallback((msg: Message) => {
         setMessages((prev) => [...prev, msg])
     }, [])
 
-    // ─── Render ────────────────────────────────────────────────────────────────
+    // ─── Confirm own message (replace temp ID with real DB row) ──────────────
+    const handleConfirm = useCallback((tempId: string, confirmedMsg: Message) => {
+        setMessages((prev) =>
+            prev.map((m) => m.id === tempId ? confirmedMsg : m)
+        )
+    }, [])
+
+    // ─── Remove failed optimistic message ─────────────────────────────────────
+    const handleFail = useCallback((tempId: string) => {
+        setMessages((prev) => prev.filter((m) => m.id !== tempId))
+    }, [])
+
+    // ─── Render ───────────────────────────────────────────────────────────────
     return (
         <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
 
-            {/* Rooms / Channels Sidebar */}
+            {/* Rooms sidebar */}
             <aside className="w-60 shrink-0 border-r bg-muted/20 flex flex-col">
                 <div className="px-4 py-3 border-b">
-                    <h2 className="font-semibold text-xs uppercase tracking-widest text-muted-foreground">
-                        Channels
-                    </h2>
+                    <h2 className="font-semibold text-xs uppercase tracking-widest text-muted-foreground">Channels</h2>
                 </div>
-
                 <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
                     {rooms.map((room) => (
                         <Link
@@ -206,7 +203,7 @@ export function ChatLayout({ rooms, currentRoom, initialMessages, currentUser }:
                             className={cn(
                                 "flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors",
                                 currentRoom.id === room.id
-                                    ? "bg-accent text-accent-foreground font-semibold"
+                                    ? "bg-accent text-accent-foreground"
                                     : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
                             )}
                         >
@@ -215,8 +212,6 @@ export function ChatLayout({ rooms, currentRoom, initialMessages, currentUser }:
                         </Link>
                     ))}
                 </nav>
-
-                {/* Current user footer */}
                 <div className="p-3 border-t flex items-center gap-2.5">
                     <div className="h-7 w-7 rounded-full bg-primary flex items-center justify-center text-xs font-bold text-primary-foreground shrink-0">
                         {currentUser.full_name?.charAt(0).toUpperCase() || "U"}
@@ -224,28 +219,39 @@ export function ChatLayout({ rooms, currentRoom, initialMessages, currentUser }:
                     <div className="flex-1 min-w-0">
                         <p className="text-xs font-semibold truncate">{currentUser.full_name}</p>
                         <p className="text-[10px] text-muted-foreground flex items-center gap-1">
-                            <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />
-                            Online
+                            <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" /> Online
                         </p>
                     </div>
                 </div>
             </aside>
 
-            {/* Main Chat Column */}
+            {/* Chat panel */}
             <div className="flex-1 flex flex-col min-w-0 bg-background">
 
-                {/* Channel Header */}
-                <div className="h-14 border-b flex items-center px-4 gap-2 shrink-0">
-                    <Hash className="h-5 w-5 text-muted-foreground" />
-                    <span className="font-semibold text-base">{currentRoom.name}</span>
+                {/* Header */}
+                <div className="h-14 border-b flex items-center justify-between px-4 shrink-0">
+                    <div className="flex items-center gap-2">
+                        <Hash className="h-5 w-5 text-muted-foreground" />
+                        <span className="font-semibold">{currentRoom.name}</span>
+                    </div>
+                    <div className={cn(
+                        "flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium",
+                        status === "connected" && "bg-green-500/10 text-green-600",
+                        status === "connecting" && "bg-yellow-500/10 text-yellow-600",
+                        status === "error" && "bg-red-500/10 text-red-500",
+                    )}>
+                        {status === "connected" && <><Wifi className="h-3 w-3" /> Live</>}
+                        {status === "connecting" && <><Loader2 className="h-3 w-3 animate-spin" /> Connecting…</>}
+                        {status === "error" && <><WifiOff className="h-3 w-3" /> Disconnected</>}
+                    </div>
                 </div>
 
-                {/* ✅ Message List — re-renders whenever `messages` changes */}
+                {/* Messages */}
                 <div className="flex-1 overflow-y-auto px-4 py-3">
                     {messages.length === 0 && (
-                        <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
+                        <div className="flex flex-col items-center justify-center h-full gap-2 text-center text-muted-foreground">
                             <p className="text-4xl">💬</p>
-                            <p className="font-semibold">No messages yet — say hello!</p>
+                            <p className="text-sm">No messages yet — say hello!</p>
                         </div>
                     )}
                     {messages.map((message) => (
@@ -255,67 +261,94 @@ export function ChatLayout({ rooms, currentRoom, initialMessages, currentUser }:
                             isOwn={message.user_id === currentUser.id}
                         />
                     ))}
-                    {/* ✅ RULE 4: auto-scroll anchor — scrolled to on every messages update */}
                     <div ref={bottomRef} />
                 </div>
 
-                {/* Message Input */}
-                <MessageInputInline
+                {/* Input */}
+                <ChatInput
                     roomId={currentRoom.id}
+                    roomName={currentRoom.name}
                     userId={currentUser.id}
-                    userProfile={profileCache.current[currentUser.id] || null}
+                    userProfile={profileCache.current[currentUser.id] ?? null}
+                    supabase={supabase}
+                    channelRef={channelRef}
                     onOptimisticSend={handleOptimisticSend}
+                    onConfirm={handleConfirm}
+                    onFail={handleFail}
                 />
             </div>
         </div>
     )
 }
 
-// ─── Inline Message Input ─────────────────────────────────────────────────────
-// Kept in same file so it shares the same supabase + profile cache context cleanly
+// ─── Chat Input ───────────────────────────────────────────────────────────────
 
-interface MessageInputInlineProps {
+interface ChatInputProps {
     roomId: string
+    roomName: string
     userId: string
     userProfile: Message["profiles"]
+    supabase: ReturnType<typeof createClient>
+    channelRef: React.MutableRefObject<RealtimeChannel | null>
     onOptimisticSend: (msg: Message) => void
+    onConfirm: (tempId: string, confirmed: Message) => void
+    onFail: (tempId: string) => void
 }
 
-function MessageInputInline({ roomId, userId, userProfile, onOptimisticSend }: MessageInputInlineProps) {
+function ChatInput({ roomId, roomName, userId, userProfile, supabase, channelRef, onOptimisticSend, onConfirm, onFail }: ChatInputProps) {
     const [text, setText] = useState("")
-    const [sending, setSending] = useState(false)
     const textareaRef = useRef<HTMLTextAreaElement>(null)
-    const supabase = useRef(createClient()).current
 
     const send = async () => {
         const trimmed = text.trim()
         if (!trimmed) return
 
-        // Clear the input immediately
         setText("")
         textareaRef.current?.focus()
 
-        // ✅ RULE 2: Push optimistic message to parent state BEFORE DB call
-        const optimistic: Message = {
-            id: `temp-${Date.now()}-${Math.random()}`,
+        // Step 1: Optimistic bubble — appears instantly
+        const tempId = `temp-${Date.now()}-${Math.random()}`
+        onOptimisticSend({
+            id: tempId,
             content: trimmed,
             created_at: new Date().toISOString(),
             user_id: userId,
-            pending: true,      // ✅ RULE 5: visual 'sending' state
+            pending: true,
             profiles: userProfile,
-        }
-        onOptimisticSend(optimistic)
+        })
 
-        setSending(true)
-        const { error } = await supabase
+        // Step 2: Persist to DB and get confirmed row
+        const { data, error } = await supabase
             .from("chat_messages")
             .insert({ content: trimmed, room_id: roomId, user_id: userId })
-        setSending(false)
+            .select("id, content, created_at, user_id")
+            .single()
 
-        if (error) {
-            console.error("Send error:", error)
-            // Remove the failed optimistic message
-            // (parent's state setter handles dedup; we won't replace it with a real one)
+        if (error || !data) {
+            console.error("Send failed:", error?.message)
+            onFail(tempId)
+            return
+        }
+
+        // Step 3: Confirm own message (swap temp → real)
+        const confirmedMsg: Message = {
+            id: data.id,
+            content: data.content,
+            created_at: data.created_at,
+            user_id: data.user_id,
+            pending: false,
+            profiles: userProfile,
+        }
+        onConfirm(tempId, confirmedMsg)
+
+        // Step 4: Broadcast to ALL other subscribers — guaranteed instant delivery
+        // This is the "push" model — sender notifies others explicitly
+        if (channelRef.current) {
+            channelRef.current.send({
+                type: "broadcast",
+                event: "new_message",
+                payload: confirmedMsg,
+            })
         }
     }
 
@@ -327,29 +360,28 @@ function MessageInputInline({ roomId, userId, userProfile, onOptimisticSend }: M
     }
 
     return (
-        <div className="shrink-0 px-4 py-3 border-t bg-background">
-            <div className="flex gap-2 items-end rounded-lg border bg-muted/30 px-3 py-2 focus-within:ring-2 focus-within:ring-ring transition-all">
+        <div className="shrink-0 px-4 py-3 border-t">
+            <div className="flex gap-2 items-end rounded-xl border bg-muted/30 px-3 py-2 focus-within:ring-2 focus-within:ring-ring transition-all">
                 <textarea
                     ref={textareaRef}
                     value={text}
                     onChange={(e) => setText(e.target.value)}
                     onKeyDown={onKeyDown}
-                    placeholder={`Message #${roomId.slice(0, 4)}…`}
+                    placeholder={`Message #${roomName}…`}
                     rows={1}
                     className="flex-1 resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground min-h-[24px] max-h-[120px]"
-                    style={{ fieldSizing: "content" } as React.CSSProperties}
                 />
                 <button
                     onClick={send}
-                    disabled={!text.trim() || sending}
-                    className="shrink-0 rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-xs font-semibold disabled:opacity-40 hover:bg-primary/90 transition-colors"
+                    disabled={!text.trim()}
+                    className="shrink-0 rounded-lg bg-primary text-primary-foreground px-3 py-1.5 text-xs font-semibold disabled:opacity-40 hover:bg-primary/90 transition-colors"
                 >
-                    {sending ? "…" : "Send"}
+                    Send
                 </button>
             </div>
-            <p className="text-[10px] text-muted-foreground mt-1">
-                <kbd className="font-mono bg-muted px-1 py-0.5 rounded text-[9px]">Enter</kbd> to send &nbsp;·&nbsp;
-                <kbd className="font-mono bg-muted px-1 py-0.5 rounded text-[9px]">Shift+Enter</kbd> for new line
+            <p className="text-[10px] text-muted-foreground mt-1.5">
+                <kbd className="bg-muted px-1 py-0.5 rounded font-mono text-[9px]">Enter</kbd> send &nbsp;·&nbsp;
+                <kbd className="bg-muted px-1 py-0.5 rounded font-mono text-[9px]">Shift+Enter</kbd> new line
             </p>
         </div>
     )
