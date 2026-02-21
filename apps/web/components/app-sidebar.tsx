@@ -8,6 +8,7 @@ import {
   Frame,
   LifeBuoy,
   Map,
+  MessageCircle,
   PieChart,
   Send,
   Settings2,
@@ -48,6 +49,11 @@ const data = {
       title: "Media",
       url: "/dashboard/media",
       icon: Frame,
+    },
+    {
+      title: "Chat",
+      url: "/dashboard/chat",
+      icon: MessageCircle,
     },
     {
       title: "Analytics",
