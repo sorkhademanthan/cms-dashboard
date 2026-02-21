@@ -1,9 +1,8 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, useCallback } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { MessageBubble } from "./message-bubble"
-import { Loader2 } from "lucide-react"
 
 interface Message {
     id: string
@@ -15,7 +14,7 @@ interface Message {
         full_name: string
         avatar_url: string
         username: string
-    }
+    } | null
 }
 
 interface MessageAreaProps {
@@ -26,21 +25,42 @@ interface MessageAreaProps {
 
 export function MessageArea({ roomId, initialMessages, currentUserId }: MessageAreaProps) {
     const [messages, setMessages] = useState<Message[]>(initialMessages)
-    const [loading, setLoading] = useState(false)
     const bottomRef = useRef<HTMLDivElement>(null)
     const supabase = createClient()
+
+    // ─── Profile Cache ─────────────────────────────────────────────
+    // Pre-populate from initialMessages so we never re-fetch known profiles
+    const profileCache = useRef<Record<string, any>>({})
+    useEffect(() => {
+        initialMessages.forEach((m) => {
+            if (m.user_id && m.profiles) {
+                profileCache.current[m.user_id] = m.profiles
+            }
+        })
+    }, []) // only on mount
 
     const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
         bottomRef.current?.scrollIntoView({ behavior })
     }
 
-    useEffect(() => {
-        // Scroll to bottom on initial load (instant, no animation)
-        scrollToBottom("instant")
-    }, [])
+    // Instant scroll on first render
+    useEffect(() => scrollToBottom("instant"), [])
+
+    // Fetch & cache a profile ONCE per unknown user
+    const getProfile = useCallback(async (userId: string) => {
+        if (profileCache.current[userId]) return profileCache.current[userId]
+
+        const { data } = await supabase
+            .from("profiles")
+            .select("full_name, avatar_url, username")
+            .eq("id", userId)
+            .single()
+
+        if (data) profileCache.current[userId] = data
+        return data || { full_name: "Unknown", avatar_url: "", username: "" }
+    }, [supabase])
 
     useEffect(() => {
-        // Realtime subscription — INSERT new message
         const channel = supabase
             .channel(`chat:${roomId}`)
             .on(
@@ -52,23 +72,44 @@ export function MessageArea({ roomId, initialMessages, currentUserId }: MessageA
                     filter: `room_id=eq.${roomId}`,
                 },
                 async (payload) => {
-                    // Fetch the full message with profile data
-                    const { data } = await supabase
-                        .from("chat_messages")
-                        .select(`*, profiles(full_name, avatar_url, username)`)
-                        .eq("id", payload.new.id)
-                        .single()
+                    const raw = payload.new as any
 
-                    if (data) {
-                        setMessages((prev) => {
-                            // Replace optimistic message if it exists, otherwise append
-                            const exists = prev.find((m) => m.id.startsWith("temp-") && m.user_id === data.user_id && m.content === data.content)
-                            if (exists) {
-                                return prev.map((m) => (m.id === exists.id ? data as any : m))
-                            }
-                            return [...prev, data as any]
-                        })
-                        scrollToBottom()
+                    // ⚡ INSTANT: Show immediately using cached profile (no wait)
+                    const cachedProfile = profileCache.current[raw.user_id] || null
+
+                    const newMsg: Message = {
+                        id: raw.id,
+                        content: raw.content,
+                        created_at: raw.created_at,
+                        user_id: raw.user_id,
+                        profiles: cachedProfile,
+                    }
+
+                    setMessages((prev) => {
+                        // Replace optimistic temp message if it matches
+                        const tempIdx = prev.findIndex(
+                            (m) => m.id.startsWith("temp-") &&
+                                m.user_id === raw.user_id &&
+                                m.content === raw.content
+                        )
+                        if (tempIdx !== -1) {
+                            const updated = [...prev]
+                            updated[tempIdx] = newMsg
+                            return updated
+                        }
+                        return [...prev, newMsg]
+                    })
+
+                    scrollToBottom()
+
+                    // If profile wasn't cached, fetch in background and patch
+                    if (!cachedProfile) {
+                        const profile = await getProfile(raw.user_id)
+                        setMessages((prev) =>
+                            prev.map((m) =>
+                                m.id === raw.id ? { ...m, profiles: profile } : m
+                            )
+                        )
                     }
                 }
             )
@@ -89,7 +130,7 @@ export function MessageArea({ roomId, initialMessages, currentUserId }: MessageA
         return () => {
             supabase.removeChannel(channel)
         }
-    }, [roomId, supabase])
+    }, [roomId, supabase, getProfile])
 
     if (messages.length === 0) {
         return (
@@ -102,7 +143,7 @@ export function MessageArea({ roomId, initialMessages, currentUserId }: MessageA
     }
 
     return (
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-0">
+        <div className="flex-1 overflow-y-auto px-4 py-4">
             {messages.map((message) => (
                 <MessageBubble
                     key={message.id}

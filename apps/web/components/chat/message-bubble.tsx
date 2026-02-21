@@ -15,7 +15,7 @@ interface MessageBubbleProps {
             full_name: string
             avatar_url: string
             username: string
-        }
+        } | null
     }
     isOwn: boolean
 }
